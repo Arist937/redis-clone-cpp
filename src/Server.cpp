@@ -54,9 +54,12 @@ int main(int argc, char **argv) {
   }
   std::cout << "Client connected\n";
   
-  // Sending PONG to client
-  if (send(client_fd, "+PONG\r\n", 7, 0) < 0) {
-    std::cerr << "Failed to send to socket\n";
+  char buffer[1024];
+  while(recv(client_fd, buffer, 1024, 0) > 0) {
+    // Sending PONG to client
+    if (send(client_fd, "+PONG\r\n", 7, 0) < 0) {
+      std::cerr << "Failed to send to socket\n";
+    }
   }
 
   close(server_fd);
