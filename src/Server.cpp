@@ -10,6 +10,7 @@
 #include <netdb.h>
 #include <sys/select.h>
 
+int handle_request(int client_fd);
 int accept_new_connection(int server_fd);
 
 int main(int argc, char **argv) {  
@@ -66,17 +67,12 @@ int main(int argc, char **argv) {
           }
 
           FD_SET(client_fd, &current);
-          std::cout << "Client connected\n";
         } else {
-          char buffer[1024];
-          if(recv(i, buffer, 1024, 0) > 0) {
-            // Sending PONG to client
-            if (send(i, "+PONG\r\n", 7, 0) < 0) {
-              std::cerr << "Failed to send to socket\n";
-            }
+          int bytes = handle_request(i);
+          if (bytes < 0) {
+            std::cerr << "Error handling client request\n";
+            return 1;
           }
-
-          std::cout << "Client requests handled\n";
         }
       }
     }
@@ -87,9 +83,49 @@ int main(int argc, char **argv) {
   return 0;
 }
 
-int accept_new_connection(int server_fd) {
-  std::cout << "Waiting for a client to connect...\n";
+int handle_request(int client_fd) {
+  char buffer[1024];
 
+  int bytes = recv(client_fd, buffer, 1024, 0);
+  if (bytes <= 0) {
+    return bytes;
+  }
+
+  std::cout.flush();
+
+  // RESP Array
+  if (buffer[0] == '*') {
+    int size = buffer[1] - '0';
+
+    std::string resp(buffer, 4,  bytes);
+    std::stringstream ss(resp);
+
+    std::string arr[size];
+    for (unsigned int i = 0; i < size; ++i) {
+      std::string temp; ss >> temp;
+      ss >> arr[i];
+    }
+    
+    if (arr[0] == "echo") {
+      std::string reply = "+" + arr[1] + "\r\n";
+      int send_bytes = reply.length();
+      char char_array[send_bytes + 1];
+      strcpy(char_array, reply.c_str());
+
+      if (send(client_fd, char_array, send_bytes, 0) < 0) {
+        std::cerr << "Failed to send to socket\n";
+      }
+    } else {
+      if (send(client_fd, "+PONG\r\n", 7, 0) < 0) {
+        std::cerr << "Failed to send to socket\n";
+      }
+    }
+  }
+
+  return bytes;
+}
+
+int accept_new_connection(int server_fd) {
   struct sockaddr_in client_addr;
   int client_addr_len = sizeof(client_addr);
 
