@@ -9,11 +9,14 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <sys/select.h>
+#include <unordered_map>
+
+std::unordered_map<std::string, std::string> store;
 
 int handle_request(int client_fd);
 int accept_new_connection(int server_fd);
 
-int main(int argc, char **argv) {  
+int main(int argc, char **argv) {
   int server_fd = socket(AF_INET, SOCK_STREAM, 0);
   if (server_fd < 0) {
    std::cerr << "Failed to create server socket\n";
@@ -91,9 +94,6 @@ int handle_request(int client_fd) {
     return bytes;
   }
 
-  std::cout.flush();
-
-  // RESP Array
   if (buffer[0] == '*') {
     int size = buffer[1] - '0';
 
@@ -108,6 +108,21 @@ int handle_request(int client_fd) {
     
     if (arr[0] == "echo") {
       std::string reply = "+" + arr[1] + "\r\n";
+      int send_bytes = reply.length();
+      char char_array[send_bytes + 1];
+      strcpy(char_array, reply.c_str());
+
+      if (send(client_fd, char_array, send_bytes, 0) < 0) {
+        std::cerr << "Failed to send to socket\n";
+      }
+    } else if (arr[0] == "set") {
+      store.insert_or_assign(arr[1], arr[2]);
+
+      if (send(client_fd, "+OK\r\n", 5, 0) < 0) {
+        std::cerr << "Failed to send to socket\n";
+      }
+    } else if (arr[0] == "get") {
+      std::string reply = "+" + store.at(arr[1]) + "\r\n";
       int send_bytes = reply.length();
       char char_array[send_bytes + 1];
       strcpy(char_array, reply.c_str());
