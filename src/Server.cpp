@@ -10,8 +10,10 @@
 #include <netdb.h>
 #include <sys/select.h>
 #include <unordered_map>
+#include <chrono>
 
 std::unordered_map<std::string, std::string> store;
+std::unordered_map<std::string, std::chrono::high_resolution_clock::duration> expirations;
 
 int handle_request(int client_fd);
 int accept_new_connection(int server_fd);
@@ -118,10 +120,31 @@ int handle_request(int client_fd) {
     } else if (arr[0] == "set") {
       store.insert_or_assign(arr[1], arr[2]);
 
+      if (size > 3) {
+        if (arr[3] == "px") {
+          int ms = std::stoi(arr[4]);
+          auto expiry_time = std::chrono::high_resolution_clock::now().time_since_epoch() + std::chrono::milliseconds(ms);
+
+          expirations.insert_or_assign(arr[1], expiry_time);
+        }
+      }
+
       if (send(client_fd, "+OK\r\n", 5, 0) < 0) {
         std::cerr << "Failed to send to socket\n";
       }
     } else if (arr[0] == "get") {
+      if (expirations.contains(arr[1])) {
+        auto now = std::chrono::high_resolution_clock::now().time_since_epoch();
+
+        if (now >= expirations.at(arr[1])) {
+          if (send(client_fd, "$-1\r\n", 5, 0) < 0) {
+            std::cerr << "Failed to send to socket\n";
+          }
+
+          return bytes;
+        }
+      }
+
       std::string reply = "+" + store.at(arr[1]) + "\r\n";
       int send_bytes = reply.length();
       char char_array[send_bytes + 1];
