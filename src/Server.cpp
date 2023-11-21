@@ -8,9 +8,10 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <netdb.h>
-#include <sys/select.h>
 #include <unordered_map>
 #include <chrono>
+#include <poll.h>
+#include <fcntl.h>
 
 std::unordered_map<std::string, std::string> store;
 std::unordered_map<std::string, std::chrono::high_resolution_clock::duration> expirations;
@@ -33,6 +34,18 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  // Set socket to be non-blocking
+  int flags = fcntl(server_fd, F_GETFL, 0);
+  if (flags == -1) {
+    std::cerr << "Error getting flags\n";
+    return 1;
+  }
+
+  if (fcntl(server_fd, F_SETFL, flags | O_NONBLOCK) == -1) {
+    std::cerr << "Error setting non-blocking flag\n";
+    return 1;
+  }
+
   struct sockaddr_in server_addr;
   server_addr.sin_family = AF_INET;
   server_addr.sin_addr.s_addr = INADDR_ANY;
@@ -49,41 +62,74 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  // Set up event loop vars
+  struct pollfd fds[100];
+  memset(fds, 0, sizeof(fds));
+
+  fds[0].fd = server_fd;
+  fds[0].events = POLLIN;
+
+  nfds_t nfds = 1;
+  int timeout = (3 * 60 * 1000);
+
   // Event loop begins
-  fd_set current, ready;
-  FD_ZERO(&current);
-  FD_SET(server_fd, &current);
-
-  while (true) {
-    ready = current;
-
-    if (select(FD_SETSIZE, &ready, nullptr, nullptr, nullptr) < 0) {
-      std::cerr << "select failed\n";
-      return 1;
+  do {
+    std::cout << "Polling...\n";
+    int rc = poll(fds, nfds, timeout);
+    if (rc < 0) {
+      std::cerr << "Poll failed\n";
+      break;
     }
 
-    for (unsigned int i = 0; i < FD_SETSIZE; ++i) {
-      if (FD_ISSET(i, &ready)) {
-        if (i == server_fd) {
-          int client_fd = accept_new_connection(server_fd);
-          if (client_fd < 0) {
-            std::cerr << "Client connection failed\n";
-            return 1;
-          }
+    if (rc == 0) {
+      std::cerr << "Poll timed out\n";
+      break;
+    }
 
-          FD_SET(client_fd, &current);
-        } else {
-          int bytes = handle_request(i);
+    nfds_t current_nfds = nfds;
+    for (int i = 0; i < current_nfds; ++i) {
+      if (fds[i].revents & POLLIN) {
+        // Case: Incoming connection
+        if (fds[i].fd == server_fd) {
+          std::cout << "Accepting incoming clients...\n";
+          int client_fd;
+          // Loop to accept all incoming connections
+          do {
+            client_fd = accept(server_fd, NULL, NULL);
+            if (client_fd < 0) {
+              std::cerr << "Client connection failed\n";
+              break;
+            }
+
+            fds[nfds].fd = client_fd;
+            fds[nfds].events = POLLIN;
+            ++nfds;
+          } while (client_fd != -1);
+        }
+        // Case: Client is ready for data
+        else {
+          std::cout << "Handling client request...\n";
+          int bytes = handle_request(fds[i].fd);
           if (bytes < 0) {
             std::cerr << "Error handling client request\n";
             return 1;
           }
+
+          if (bytes == 0) {
+            std::cout << "Client closed\n";
+            memset(fds + i, 0, sizeof(pollfd));
+            close(fds[i].fd);
+          }
         }
       }
     }
-  }
+  } while (true);
 
-  close(server_fd);
+  for (int i = 0; i < nfds; ++i) {
+    if(fds[i].fd >= 0) {
+      close(fds[i].fd);
+    }
+  }
 
   return 0;
 }
@@ -161,11 +207,4 @@ int handle_request(int client_fd) {
   }
 
   return bytes;
-}
-
-int accept_new_connection(int server_fd) {
-  struct sockaddr_in client_addr;
-  int client_addr_len = sizeof(client_addr);
-
-  return accept(server_fd, (struct sockaddr *) &client_addr, (socklen_t *) &client_addr_len);
 }
